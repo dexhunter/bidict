@@ -679,7 +679,8 @@ class BidictBase(BidirectionalMapping[KT, VT]):
             for key, val in iteritems(arg, **kw):
                 dedup_result = self._dedup(key, val, on_dup)
                 if dedup_result is not None:
-                    write(key, val, *dedup_result, unwrites=unwrites)
+                    oldkey, oldval = dedup_result
+                    write(key, val, oldkey, oldval, unwrites=unwrites)
         except BaseException:
             if unwrites is not None:
                 for fn, *args in reversed(unwrites):
