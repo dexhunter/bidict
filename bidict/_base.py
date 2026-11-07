@@ -753,7 +753,10 @@ class BidictBase(BidirectionalMapping[KT, VT]):
     @override
     def __reduce__(self) -> tuple[t.Any, ...]:
         """Return state information for pickling."""
-        return self.__class__._from_other, (dict(self),)
+        cls = type(self)
+        # When items() is the backing dict's own view (not e.g. an ordered bidict's), copy that dict at C speed.
+        copy_fwdm = cls._fwdm_has_dict_views and cls.items is BidictBase.items
+        return cls._from_other, (dict(self._fwdm if copy_fwdm else self.items()),)
 
 
 # See BidictBase._set_reversed() above.
