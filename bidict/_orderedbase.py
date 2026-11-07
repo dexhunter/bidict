@@ -168,22 +168,25 @@ class SentinelNode(Node):
         # is first advanced, so mutating in between is detected too, as OrderedDict does.
         return self._iternodes(self.version, self.version.value, reverse=reverse)
 
-    def _iternodes(self, version: Version, initial_version: int, *, reverse: bool) -> Iterator[Node]:
+    def _iternodes(
+        self, version: Version, initial_version: int, *, reverse: bool, lookup: dict[Node, t.Any] | None = None
+    ) -> Iterator[t.Any]:
+        # If *lookup* is given, yield lookup[node] rather than each node, sparing callers that want
+        # what the nodes map to a second iterator (and its per-item call) layered over this one.
         # Advance via a literal attr name rather than getattr(node, 'prv' if reverse else 'nxt'):
         # the dynamic lookup the latter needs costs more per node than everything else in
         # this loop put together, since only a literal gets CPython's specialized LOAD_ATTR.
         # (operator.attrgetter does not help: it is a call, not a load.)
+        # The version is checked once per step, before testing for the end, so that a mutation which
+        # happens to leave the iterator pointing at the sentinel is caught as well -- e.g. move_to_end()
+        # of the item just yielded, which relinks it to exactly where iteration is about to stop.
         node = self.prv if reverse else self.nxt
-        while node is not self:
-            if version.value != initial_version:
-                raise RuntimeError(_MUTATED_DURING_ITERATION)
-            yield node
+        while version.value == initial_version:
+            if node is self:
+                return
+            yield node if lookup is None else lookup[node]
             node = node.prv if reverse else node.nxt
-        # Check on the step that finds the end too, so that a mutation which happens to leave the
-        # iterator pointing at the sentinel is caught as well -- e.g. move_to_end() of the item
-        # just yielded, which relinks it to exactly where iteration is about to stop.
-        if version.value != initial_version:
-            raise RuntimeError(_MUTATED_DURING_ITERATION)
+        raise RuntimeError(_MUTATED_DURING_ITERATION)
 
     def new_last_node(self) -> Node:
         """Create and return a new terminal node."""
@@ -353,12 +356,13 @@ class OrderedBidictBase(BidictBase[KT, VT]):
         # watches the keys for changes, not the values, as a dict's iterators do.
         sntl, bykey = self._sntl, self._bykey
         version = sntl.version if bykey else sntl.inv_version
-        nodes = sntl._iternodes(version, version.value, reverse=reverse)
-        korv_by_node = self._node_by_korv.inverse
+        # Look nodes up in the plain dict backing _node_by_korv.inverse, inside the traversal itself,
+        # so that no further iterator, Python-level frame, or BidictBase.__getitem__ call runs per item.
+        korvs = sntl._iternodes(version, version.value, reverse=reverse, lookup=self._node_by_korv._invm)
         if bykey is not values:  # yield what the nodes are looked up by
-            return (korv_by_node[node] for node in nodes)
+            return korvs
         other_by_korv = self._fwdm if bykey else self._invm
-        return (other_by_korv[korv_by_node[node]] for node in nodes)
+        return (other_by_korv[korv] for korv in korvs)
 
     # Override the keys() and items() implementations inherited from BidictBase, which may
     # delegate to the backing _fwdm dict: an ordered bidict's order is encoded in its linked
